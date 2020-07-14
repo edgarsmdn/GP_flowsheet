@@ -24,6 +24,7 @@ Notes on editions (edited lines have the following at the end '#!!!'):
         not positive definite Matrix.
     5. The function 'calc_cov_sample_casadi' was added to replace this calculation
         whenever the function 'GP_inference_casadi' is called.
+    6. Introduce the Matern 3/2 and 5/2 kernel.
     
 """
 import numpy as np
@@ -62,41 +63,79 @@ class GP:
         Calculates the covariance matrix of a dataset Xnorm
         --- decription ---
         '''
-    
+        nugget     = np.eye(X_norm.shape[0])* 1.1e-6                        #!!!
         if kernel == 'RBF':
             dist       = cdist(X_norm, X_norm, 'seuclidean', V=W)**2
-            nugget     = np.eye(X_norm.shape[0])* 1.1e-6                    #!!!
             cov_matrix = sf2*np.exp(-0.5*dist) + nugget                     #!!!
-            return cov_matrix
             # Note: cdist =>  sqrt(sum(u_i-v_i)^2/V[x_i])
+        elif kernel =='Matern_32':                                          
+            dist = cdist(X_norm, X_norm, 'seuclidean', V=W)
+            t_1 = 1 + 3**0.5*dist 
+            t_2 = np.exp(-3**0.5*dist)
+            cov_matrix = sf2 * t_1 * t_2 + nugget
+        elif kernel =='Matern_52':                                          
+            dist = cdist(X_norm, X_norm, 'seuclidean', V=W)
+            t_1  = 1 + 5**0.5* dist + 5/3*dist**2
+            t_2  = np.exp(-5**2*dist)
+            cov_matrix = sf2 * t_1 * t_2 + nugget
         else:
             print('ERROR no kernel with name ', kernel)
+            
+        return cov_matrix
 
     ################################
     # --- Covariance of sample --- #
     ################################    
         
-    def calc_cov_sample(self,xnorm,Xnorm,ell,sf2):
+    def calc_cov_sample(self,xnorm,Xnorm,ell,sf2, kernel):
         '''
         Calculates the covariance of a single sample xnorm against the dataset Xnorm
         --- decription ---
         '''    
         # internal parameters
         nx_dim = self.nx_dim
-
-        dist = cdist(Xnorm, xnorm.reshape(1,nx_dim), 'seuclidean', V=ell)**2
-        cov_matrix = sf2 * np.exp(-.5*dist)
+        
+        if kernel == 'RBF':
+            dist = cdist(Xnorm, xnorm.reshape(1,nx_dim), 'seuclidean', V=ell)**2
+            cov_matrix = sf2 * np.exp(-.5*dist)
+        elif kernel =='Matern_32':
+            dist = cdist(Xnorm, xnorm.reshape(1,nx_dim), 'seuclidean', V=ell)
+            t_1 = 1 + 3**0.5*dist 
+            t_2 = np.exp(-3**0.5*dist)
+            cov_matrix = sf2 * t_1 * t_2
+        elif kernel == 'Matern_52':
+            dist = cdist(Xnorm, xnorm.reshape(1,nx_dim), 'seuclidean', V=ell)
+            t_1  = 1 + 5**0.5* dist + 5/3*dist**2
+            t_2  = np.exp(-5**2*dist)
+            cov_matrix = sf2 * t_1 * t_2
+        else:
+            print('ERROR no kernel with name ', kernel)
 
         return cov_matrix 
 
-    def calc_cov_sample_casadi(self, xnorm, Xnorm, ell, sf2): #!!!
+    def calc_cov_sample_casadi(self, xnorm, Xnorm, ell, sf2, kernel): #!!!
         '''
         Calculates covariance of single sample against data set using CASADI notation
         '''
-        dist = sum2((Xnorm - repmat(xnorm, len(Xnorm)))**2 /
+        if kernel == 'RBF':
+            dist = sum2((Xnorm - repmat(xnorm, len(Xnorm)))**2 /
                     repmat(transpose(ell), len(Xnorm)))
-        cov_matrix = sf2 * exp(-.5*dist)
-            
+            cov_matrix = sf2 * exp(-.5*dist)
+        elif kernel =='Matern_32':
+            dist = sqrt(sum2((Xnorm - repmat(xnorm, len(Xnorm)))**2 /
+                    repmat(transpose(ell), len(Xnorm))))
+            t_1 = 1 + 3**0.5*dist 
+            t_2 = exp(-3**0.5*dist)
+            cov_matrix = sf2 * t_1 * t_2
+        elif kernel == 'Matern_52':
+            dist = sqrt(sum2((Xnorm - repmat(xnorm, len(Xnorm)))**2 /
+                    repmat(transpose(ell), len(Xnorm))))
+            t_1  = 1 + 5**0.5* dist + 5/3*dist**2
+            t_2  = exp(-5**2*dist)
+            cov_matrix = sf2 * t_1 * t_2
+        else:
+            print('ERROR no kernel with name ', kernel)
+        
         return cov_matrix           
         
     ###################################
@@ -222,7 +261,7 @@ class GP:
             hyper          = hypopt[:,i]
             ellopt, sf2opt = np.exp(2*hyper[:nx_dim]), np.exp(2*hyper[nx_dim])
             # --- determine covariance of each output --- #
-            k       = calc_cov_sample(xnorm,Xsample,ellopt,sf2opt)
+            k       = calc_cov_sample(xnorm,Xsample,ellopt,sf2opt,kernel)
             mean[i] = np.matmul(np.matmul(k.T,invK),Ysample[:,i])
             var[i]  = sf2opt - np.matmul(np.matmul(k.T,invK),k)
             #var[i] = sf2opt + Sigma_w[i,i]/stdY[i]**2 - np.matmul(np.matmul(k.T,invK),k) (if input noise)
@@ -255,7 +294,7 @@ class GP:
             hyper          = hypopt[:,i]
             ellopt, sf2opt = np.exp(2*hyper[:nx_dim]), np.exp(2*hyper[nx_dim])
             # --- determine covariance of each output --- #
-            k       = calc_cov_sample(xnorm, Xsample, ellopt, sf2opt)
+            k       = calc_cov_sample(xnorm, Xsample, ellopt, sf2opt,kernel)
             mean    = (k.T @ invK) @ Ysample[:,i].reshape(-1,1)
             var     = sf2opt - (k.T @ invK) @ k
             #var[i] = sf2opt + Sigma_w[i,i]/stdY[i]**2 - np.matmul(np.matmul(k.T,invK),k) (if input noise)
